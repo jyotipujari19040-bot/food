@@ -1,0 +1,210 @@
+
+import streamlit as st
+import sqlite3
+import hashlib
+
+# Database connection
+conn = sqlite3.connect("blog.db", check_same_thread=False)
+cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    email TEXT UNIQUE,
+    password TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS blogs(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    title TEXT,
+    category TEXT,
+    content TEXT
+)
+""")
+conn.commit()
+
+st.set_page_config(page_title="Blog Dashboard", page_icon="📝")
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register(name, email, password):
+    try:
+        cur.execute(
+            "INSERT INTO users(name,email,password) VALUES(?,?,?)",
+            (name, email.lower(), hash_password(password))
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+def login(email, password):
+    cur.execute(
+        "SELECT id,name,email FROM users WHERE email=? AND password=?",
+        (email.lower(), hash_password(password))
+    )
+    return cur.fetchone()
+
+def logout():
+    st.session_state.clear()
+    st.rerun()
+
+# Session state
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+st.title("📝 InkSpace Blog Application")
+
+# Login and registration
+if st.session_state.user is None:
+
+    choice = st.sidebar.selectbox(
+        "Select Option", ["Login", "Register"]
+    )
+
+    if choice == "Register":
+        st.subheader("Create Account")
+
+        name = st.text_input("Full Name")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Register"):
+            if name and email and len(password) >= 8:
+                if register(name, email, password):
+                    st.success("Registration successful! Please login.")
+                else:
+                    st.error("Email already registered.")
+            else:
+                st.warning("Enter all details. Password must be at least 8 characters.")
+
+    else:
+        st.subheader("User Login")
+
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            user = login(email, password)
+
+            if user:
+                st.session_state.user = user
+                st.rerun()
+            else:
+                st.error("Invalid email or password.")
+
+# Private Dashboard
+else:
+    user_id, name, email = st.session_state.user
+
+    st.sidebar.success(f"Welcome {name}")
+
+    menu = st.sidebar.radio(
+        "Dashboard",
+        ["My Blogs", "Create Blog", "Profile"]
+    )
+
+    if st.sidebar.button("Logout"):
+        logout()
+
+    st.title(f"Welcome, {name} 👋")
+
+    # My Blogs
+    if menu == "My Blogs":
+        st.subheader("My Published Blogs")
+
+        cur.execute(
+            "SELECT * FROM blogs WHERE user_id=? ORDER BY id DESC",
+            (user_id,)
+        )
+
+        blogs = cur.fetchall()
+
+        if blogs:
+            for blog in blogs:
+                with st.expander(blog[2]):
+                    st.write("Category:", blog[3])
+                    st.write(blog[4])
+
+                    if st.button("Delete", key=f"del{blog[0]}"):
+                        cur.execute(
+                            "DELETE FROM blogs WHERE id=? AND user_id=?",
+                            (blog[0], user_id)
+                        )
+                        conn.commit()
+                        st.rerun()
+
+                    with st.form(f"edit{blog[0]}"):
+                        new_title = st.text_input(
+                            "Title", blog[2], key=f"title{blog[0]}"
+                        )
+                        new_content = st.text_area(
+                            "Content", blog[4], key=f"content{blog[0]}"
+                        )
+
+                        if st.form_submit_button("Update Blog"):
+                            cur.execute("""
+                                UPDATE blogs
+                                SET title=?, content=?
+                                WHERE id=? AND user_id=?
+                            """, (new_title, new_content, blog[0], user_id))
+                            conn.commit()
+                            st.success("Blog updated!")
+                            st.rerun()
+        else:
+            st.info("You have not created any blogs yet.")
+
+    # Create Blog
+    elif menu == "Create Blog":
+        st.subheader("Create New Blog")
+
+        title = st.text_input("Blog Title")
+        category = st.selectbox(
+            "Category",
+            ["Technology", "Education", "Lifestyle", "Travel", "Food"]
+        )
+        content = st.text_area("Blog Content", height=200)
+
+        if st.button("Publish Blog"):
+            if title and content:
+                cur.execute("""
+                    INSERT INTO blogs(user_id,title,category,content)
+                    VALUES(?,?,?,?)
+                """, (user_id, title, category, content))
+                conn.commit()
+                st.success("Blog published successfully!")
+            else:
+                st.warning("Enter title and content.")
+
+    # Profile
+    elif menu == "Profile":
+        st.subheader("User Profile")
+
+        st.write("User ID:", user_id)
+        st.write("Email:", email)
+
+        new_name = st.text_input("Update Name", value=name)
+
+        if st.button("Save Profile"):
+            if new_name.strip():
+                cur.execute(
+                    "UPDATE users SET name=? WHERE id=?",
+                    (new_name.strip(), user_id)
+                )
+                conn.commit()
+
+                st.session_state.user = (
+                    user_id, new_name.strip(), email
+                )
+                st.success("Profile updated!")
+                st.rerun()
+            else:
+                st.warning("Name cannot be empty.")
+
+st.markdown("---")
+st.caption("InkSpace Blog Application | Python + Streamlit + SQLite")
